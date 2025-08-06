@@ -1,6 +1,8 @@
 import os
 from collections.abc import AsyncIterable
 from typing import Any, Literal, Optional
+import logging
+import pymysql
 
 import httpx
 import sqlalchemy as sa
@@ -11,116 +13,15 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.base import Checkpointer
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.mysql.pymysql import PyMySQLSaver
+from langgraph.store.mysql.pymysql import PyMySQLStore
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
 
 
-class MySQLCheckpointer(Checkpointer):
-    """MySQL implementation of the Checkpointer interface for LangGraph."""
-
-    def __init__(self):
-        """Initialize the MySQL Checkpointer."""
-        # Get MySQL connection information from environment variables
-        mysql_host = os.getenv("MYSQL_HOST", "localhost")
-        mysql_port = os.getenv("MYSQL_PORT", "3306")
-        mysql_user = os.getenv("MYSQL_USER", "root")
-        mysql_password = os.getenv("MYSQL_PASSWORD", "")
-        mysql_database = os.getenv("MYSQL_DATABASE", "a2a_currency")
-
-        # Create the database connection string
-        self.connection_string = (
-            f"mysql+pymysql://{mysql_user}:{mysql_password}@"
-            f"{mysql_host}:{mysql_port}/{mysql_database}"
-        )
-        
-        # Create the database engine
-        self.engine = create_engine(self.connection_string)
-        
-        # Create table if it doesn't exist
-        self._create_table_if_not_exists()
-    
-    def _create_table_if_not_exists(self) -> None:
-        """Create the checkpoint table if it doesn't exist."""
-        metadata = MetaData()
-        
-        Table(
-            "langgraph_checkpoints",
-            metadata,
-            Column("context_id", String(255), primary_key=True),
-            Column("checkpoint_data", JSON, nullable=False),
-        )
-        
-        metadata.create_all(self.engine)
-
-    async def get(self, config: dict) -> Optional[dict]:
-        """Get a checkpoint for a specific config."""
-        try:
-            # Extract the thread_id from the config
-            thread_id = config.get("configurable", {}).get("thread_id")
-            if not thread_id:
-                return None
-            
-            # Query the database for the checkpoint
-            with self.engine.connect() as connection:
-                result = connection.execute(
-                    sa.text(
-                        "SELECT checkpoint_data FROM langgraph_checkpoints "
-                        "WHERE context_id = :context_id"
-                    ),
-                    {"context_id": thread_id}
-                )
-                row = result.fetchone()
-                
-                if row:
-                    return row[0]
-                return None
-        except SQLAlchemyError:
-            # If there's an error, return None
-            return None
-
-    async def put(self, config: dict, state: dict) -> None:
-        """Save a checkpoint for a specific config."""
-        try:
-            # Extract the thread_id from the config
-            thread_id = config.get("configurable", {}).get("thread_id")
-            if not thread_id:
-                return
-            
-            # Save the checkpoint to the database
-            with self.engine.connect() as connection:
-                # Try to update first
-                result = connection.execute(
-                    sa.text(
-                        "UPDATE langgraph_checkpoints "
-                        "SET checkpoint_data = :checkpoint_data "
-                        "WHERE context_id = :context_id"
-                    ),
-                    {
-                        "context_id": thread_id,
-                        "checkpoint_data": state
-                    }
-                )
-                
-                # If no rows were updated, insert a new row
-                if result.rowcount == 0:
-                    connection.execute(
-                        sa.text(
-                            "INSERT INTO langgraph_checkpoints "
-                            "(context_id, checkpoint_data) "
-                            "VALUES (:context_id, :checkpoint_data)"
-                        ),
-                        {
-                            "context_id": thread_id,
-                            "checkpoint_data": state
-                        }
-                    )
-                
-                connection.commit()
-        except SQLAlchemyError:
-            # If there's an error, just return
-            pass
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @tool
 def get_exchange_rate(
@@ -193,17 +94,28 @@ class CurrencyAgent:
                 temperature=0,
             )
         self.tools = [get_exchange_rate]
+
+        logger.info(f'CurrencyAgent init tools done')
         
         # Initialize the MySQL checkpointer
-        self.checkpointer = MySQLCheckpointer()
+        mysql_host = os.getenv("MYSQL_HOST", "localhost")
+        mysql_port = os.getenv("MYSQL_PORT", "3306")
+        mysql_user = os.getenv("MYSQL_USER", "root")
+        mysql_password = os.getenv("MYSQL_PASSWORD", "")
+        mysql_database = os.getenv("MYSQL_DATABASE", "a2a")
+
+        connection = pymysql.connect(host=mysql_host,port=int(mysql_port),user=mysql_user,password=mysql_password,database=mysql_database,autocommit=True)
+        self.checkpoint = PyMySQLSaver(conn=connection)
 
         self.graph = create_react_agent(
             self.model,
             tools=self.tools,
-            checkpointer=self.checkpointer,
+            checkpointer=self.checkpoint,
             prompt=self.SYSTEM_INSTRUCTION,
             response_format=(self.FORMAT_INSTRUCTION, ResponseFormat),
         )
+
+        logger.info(f'CurrencyAgent init done')
 
     async def stream(self, query, context_id) -> AsyncIterable[dict[str, Any]]:
         inputs = {'messages': [('user', query)]}

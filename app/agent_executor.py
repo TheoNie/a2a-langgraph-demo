@@ -1,4 +1,5 @@
 import logging
+import traceback
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -80,6 +81,7 @@ class CurrencyAgentExecutor(AgentExecutor):
 
         except Exception as e:
             logger.error(f'An error occurred while streaming the response: {e}')
+            logger.error(traceback.format_exc())
             raise ServerError(error=InternalError()) from e
 
     def _validate_request(self, context: RequestContext) -> bool:

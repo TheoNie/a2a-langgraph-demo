@@ -6,6 +6,7 @@ import click
 import httpx
 import uvicorn
 
+from sqlalchemy.ext.asyncio import create_async_engine
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import (
@@ -75,9 +76,10 @@ def main(host, port):
         mysql_password = os.getenv("MYSQL_PASSWORD", "")
         mysql_database = os.getenv("MYSQL_DATABASE", "a2a_currency")
         connection_string = (
-            f"mysql+pymysql://{mysql_user}:{mysql_password}@"
+            f"mysql+aiomysql://{mysql_user}:{mysql_password}@"
             f"{mysql_host}:{mysql_port}/{mysql_database}"
         )
+        engine = create_async_engine(connection_string)
 
         # Setup agent card
         capabilities = AgentCapabilities(streaming=True, push_notifications=True)
@@ -103,9 +105,9 @@ def main(host, port):
         httpx_client = httpx.AsyncClient()
         
         # Initialize MySQL storage classes
-        mysql_task_store = DatabaseTaskStore(connection_string=connection_string)
+        mysql_task_store = DatabaseTaskStore(engine=engine)
         mysql_push_config_store = DatabasePushNotificationConfigStore(
-            connection_string=connection_string
+            engine=engine
         )
         
         push_sender = BasePushNotificationSender(
