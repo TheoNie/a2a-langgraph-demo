@@ -18,11 +18,13 @@ from a2a.types import (
     AgentCapabilities,
     AgentCard,
     AgentSkill,
+    HTTPAuthSecurityScheme,
 )
 from dotenv import load_dotenv
 
 from app.agent import CurrencyAgent
 from app.agent_executor import CurrencyAgentExecutor
+from app.basic_auth_middleware import BasicAuthMiddleware
 
 
 load_dotenv()
@@ -90,6 +92,18 @@ def main(host, port):
             tags=['currency conversion', 'currency exchange'],
             examples=['What is exchange rate between USD and GBP?'],
         )
+        security_schemes = {
+            'basic_auth_client': HTTPAuthSecurityScheme(
+                scheme='Basic',
+                description='Basic Auth',
+            )
+        }
+        security = [{
+            'basic_auth_client': [
+                #'write:users',  //遵循OpenAPI3.0的规范，可以限定某个安全对象是否必须要满足某些作用域
+            ],
+        }]
+
         agent_card = AgentCard(
             name='Currency Agent with MySQL',
             description='Helps with exchange rates for currencies with persistent storage',
@@ -99,6 +113,8 @@ def main(host, port):
             default_output_modes=CurrencyAgent.SUPPORTED_CONTENT_TYPES,
             capabilities=capabilities,
             skills=[skill],
+            security_schemes=security_schemes,
+            security=security
         )
 
         # Setup A2A server with MySQL storage
@@ -126,8 +142,15 @@ def main(host, port):
             agent_card=agent_card, http_handler=request_handler
         )
 
+
+        app = server.build()
+        app.add_middleware(
+            BasicAuthMiddleware,
+            public_paths=['/.well-known/agent-card.json'],
+        )
+
         # Start the server
-        uvicorn.run(server.build(), host=host, port=port)
+        uvicorn.run(app, host=host, port=port)
 
     except MissingAPIKeyError as e:
         logger.error(f'Error: {e}')
