@@ -106,6 +106,7 @@ class CurrencyAgent:
 
         connection = pymysql.connect(host=mysql_host,port=int(mysql_port),user=mysql_user,password=mysql_password,database=mysql_database,autocommit=True)
         self.checkpoint = PyMySQLSaver(conn=connection)
+        self.checkpoint.setup()
 
         self.graph = create_react_agent(
             self.model,
